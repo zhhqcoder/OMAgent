@@ -1,0 +1,86 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: OMAgent
+
+  # DashScope AI 配置
+  ai:
+    dashscope:
+      api-key: sk-63c8a929280b433ea4f9138834cd5413
+      chat:
+        options:
+          model: qwen-plus
+          temperature: 0.7
+          top-p: 0.9
+          max-tokens: 4096
+      # 多模态模型配置（用于截图分析）
+      multimodal:
+        options:
+          model: qwen3-omni-flash
+      embedding:
+        options:
+          model: text-embedding-v1
+    model:
+      embedding: dashscope
+
+  # Redis 配置
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      # password:
+      jedis:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+          max-wait: -1ms
+
+  # MySQL 配置
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/omagent?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+    username: root
+    password: 123456
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+
+  # 文件上传配置
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 100MB
+
+# OMAgent 自定义配置
+omagent:
+  # 文件存储路径
+  upload:
+    dir: uploads
+  # 知识库配置
+  knowledge:
+    config-index:
+      name: oms-config-index
+      prefix: oms-config
+    source-index:
+      name: oms-source-index
+      prefix: oms-source
+    # 向量检索相似度阈值（0~1），低于此阈值的结果会被过滤
+    similarity-threshold: 0.1
+
+  # 截图分析配置
+  screenshot:
+    max-size: 5MB
+    allowed-types: image/jpeg,image/png,image/webp
+
+logging:
+  level:
+    com.eastcom.omagent: DEBUG
+    org.springframework.ai: DEBUG

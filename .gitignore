@@ -1,0 +1,40 @@
+# 构建产物
+target/
+*.class
+*.jar
+*.war
+
+# 外部配置目录（由 build.ps1 从 src/main/resources 同步生成）
+config/
+
+# 日志
+start.log
+build_result.log
+build.log
+debug_doc_extract.txt
+
+# IDE
+.idea/
+*.iml
+.project
+.classpath
+.settings/
+.vscode/
+
+# 上传文件
+uploads/
+
+# 临时文件
+*.tmp
+*.bak
+build2.log
+build3.log
+compile_err.log
+TestDoc.java
+test.jsh
+
+# Codebuddy
+.codebuddy/
+
+# node_modules
+omagent-ui/node_modules/
