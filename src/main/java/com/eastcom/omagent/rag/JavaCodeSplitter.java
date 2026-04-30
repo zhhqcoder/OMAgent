@@ -330,17 +330,10 @@ public class JavaCodeSplitter {
             String methodName = m.group(2);
             String params = m.group(3).trim();
 
-            // 判断是否为方法（排除字段声明等误匹配）
-            // 构造器没有返回类型，返回类型与类名相同
-            // 字段声明如 "List<String> names = ..." 也会匹配，通过检查是否有 { 来区分
-            int bracePos = classBody.indexOf('{', m.end() - 1);
-            if (bracePos < 0) continue;
+            // 正则已匹配到 '{'，bracePos 直接取 m.end() - 1
+            int bracePos = m.end() - 1;
 
-            // 确认 { 紧跟在方法声明之后（中间只有空白或throws）
-            String between = classBody.substring(m.end(), bracePos).trim();
-            if (!between.isEmpty() && !between.startsWith("throws") && !between.startsWith(",")) {
-                continue;
-            }
+            // 无需再搜索 '{' 或检查中间内容，正则已确保声明后紧跟 '{'
 
             // 找到方法声明的完整起始行
             int lineStart = classBody.lastIndexOf('\n', m.start()) + 1;
