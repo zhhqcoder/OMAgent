@@ -1,0 +1,14 @@
+{
+  "name": "doc2md",
+  "version": "1.0.0",
+  "description": "将 .doc/.docx 文件转换为 Markdown 格式，保留原始文档结构（标题、表格、列表等）",
+  "main": "convert.js",
+  "scripts": {
+    "convert": "node convert.js"
+  },
+  "dependencies": {
+    "word-extractor": "^1.0.4"
+  },
+  "keywords": ["doc", "docx", "markdown", "converter"],
+  "license": "MIT"
+}
