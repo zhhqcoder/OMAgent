@@ -31,6 +31,8 @@ public class DocumentEtlService {
     private final VectorStore sourceVectorStore;
     private final TokenTextSplitter textSplitter;
     private final MarkdownSectionSplitter markdownSplitter;
+    private final JavaCodeSplitter javaCodeSplitter;
+    private final PomFileSplitter pomFileSplitter;
     private final ChatModel chatModel;
 
     /** LLM生成中文摘要的system prompt，要求空格分词输出 */
@@ -49,6 +51,36 @@ public class DocumentEtlService {
             示例输出：局数据 bureaudata ftp 模式 配置项 ftpMode 地址 账号 密码 端口 路径 日志记录 备份文件 logRecordBackupFilePath
             """;
 
+    /** LLM生成源码中文摘要的system prompt，聚焦代码功能描述 */
+    private static final String CODE_SUMMARY_SYSTEM_PROMPT = """
+            你是一个Java代码中文摘要生成器。根据给定的代码片段，输出中文功能摘要。
+            关键要求：
+            1. 用一句话说明该方法/类的核心功能
+            2. 列出关键参数名和返回值（保留英文标识符）
+            3. 提及调用的关键外部服务或依赖（如有）
+            4. 每个中文词语之间必须用空格分隔（这是最关键的要求）
+            5. 不超过100字
+            6. 只输出空格分词的摘要内容，不要输出其他解释
+            7. 必须包含中文领域术语作为检索锚点（如"日志分析"、"配置检索"、"向量入库"等）
+            8. 中文分词粒度保持词组完整，不要拆成单字。例如"日志记录"应输出为"日志记录"而不是"日 志 记 录"
+            示例输出：文档 增强 驼峰 标识符 拆分 enhanceCamelCaseText 方法 拆分 驼峰命名 小写化 追加 关键词 索引
+            """;
+
+    /** LLM生成POM依赖中文摘要的system prompt，聚焦依赖关系和功能描述 */
+    private static final String POM_SUMMARY_SYSTEM_PROMPT = """
+            你是一个Maven POM依赖中文摘要生成器。根据给定的POM文件片段，输出中文功能摘要。
+            关键要求：
+            1. 列出依赖的groupId:artifactId（保留英文标识符）
+            2. 用一句话说明该依赖的核心功能
+            3. 提及依赖范围（scope）和可选性（optional）如有
+            4. 每个中文词语之间必须用空格分隔（这是最关键的要求）
+            5. 不超过80字
+            6. 只输出空格分词的摘要内容，不要输出其他解释
+            7. 必须包含中文领域术语作为检索锚点（如"Web框架"、"数据库驱动"、"构建插件"等）
+            8. 中文分词粒度保持词组完整，不要拆成单字。例如"日志框架"应输出为"日志框架"而不是"日 志 框 架"
+            示例输出：Spring Boot Web starter web框架 提供 REST 开发 spring-boot-starter-web 嵌入式 Tomcat
+            """;
+
     /** 支持的源码文件扩展名 */
     private static final Set<String> SOURCE_CODE_EXTENSIONS = Set.of(
             ".java", ".xml", ".yml", ".yaml", ".properties",
@@ -64,7 +96,7 @@ public class DocumentEtlService {
 
     /** 支持的压缩包扩展名 */
     private static final Set<String> ARCHIVE_EXTENSIONS = Set.of(
-            ".zip"
+            ".zip", ".7z"
     );
 
     /** Embedding API 单次请求最大文本数（DashScope限制25） */
@@ -89,6 +121,13 @@ public class DocumentEtlService {
                 200,    // overlapChars - 二次切分重叠
                 true    // skipToc - 跳过目录区域
         );
+        this.javaCodeSplitter = new JavaCodeSplitter(
+                1500,   // maxChunkSize - 非空白字符上限
+                5       // overlapLines - 二次切分重叠行数
+        );
+        this.pomFileSplitter = new PomFileSplitter(
+                1500    // maxChunkSize - 单个chunk最大字符数
+        );
     }
 
     /**
@@ -96,8 +135,8 @@ public class DocumentEtlService {
      */
     public int importToConfigStore(File file, Map<String, Object> metadata) {
         List<Document> documents = loadAndSplit(file, metadata);
-        documents = enhanceDocuments(documents);
-        documents = generateChineseSummaries(documents);
+        documents = enhanceDocuments(documents, false);
+        documents = generateChineseSummaries(documents, SUMMARY_SYSTEM_PROMPT);
         addInBatches(configVectorStore, documents);
         return documents.size();
     }
@@ -107,8 +146,9 @@ public class DocumentEtlService {
      */
     public int importToSourceStore(File file, Map<String, Object> metadata) {
         List<Document> documents = loadAndSplit(file, metadata);
-        documents = enhanceDocuments(documents);
-        documents = generateChineseSummaries(documents);
+        boolean isSourceCode = isSourceCodeFile(file);
+        documents = enhanceDocuments(documents, isSourceCode);
+        documents = generateChineseSummaries(documents, chooseSummaryPrompt(file, isSourceCode));
         addInBatches(sourceVectorStore, documents);
         return documents.size();
     }
@@ -118,8 +158,8 @@ public class DocumentEtlService {
      */
     public int importDocumentsToConfigStore(List<Document> documents) {
         List<Document> splitDocs = textSplitter.apply(documents);
-        splitDocs = enhanceDocuments(splitDocs);
-        splitDocs = generateChineseSummaries(splitDocs);
+        splitDocs = enhanceDocuments(splitDocs, false);
+        splitDocs = generateChineseSummaries(splitDocs, SUMMARY_SYSTEM_PROMPT);
         addInBatches(configVectorStore, splitDocs);
         return splitDocs.size();
     }
@@ -129,8 +169,8 @@ public class DocumentEtlService {
      */
     public int importDocumentsToSourceStore(List<Document> documents) {
         List<Document> splitDocs = textSplitter.apply(documents);
-        splitDocs = enhanceDocuments(splitDocs);
-        splitDocs = generateChineseSummaries(splitDocs);
+        splitDocs = enhanceDocuments(splitDocs, true);
+        splitDocs = generateChineseSummaries(splitDocs, CODE_SUMMARY_SYSTEM_PROMPT);
         addInBatches(sourceVectorStore, splitDocs);
         return splitDocs.size();
     }
@@ -147,11 +187,18 @@ public class DocumentEtlService {
     }
 
     /**
-     * 对文档进行文本增强：将驼峰命名拆分为独立单词并小写化，追加到原文末尾。
-     * 例如：logRecordBackupFilePath → 追加 "log record backup file path logrecordbackupfilepath"
-     * 保留原文不修改，额外追加增强词以便向量检索时提高匹配率。
+     * 对文档进行文本增强。
+     * 源码chunk已有上下文头（scope chain + method signature），不需要额外驼峰增强；
+     * 配置文档仍用驼峰增强提高检索匹配率。
+     *
+     * @param documents     待增强的文档列表
+     * @param isSourceCode  是否为源码chunk（true则跳过驼峰增强）
      */
-    private List<Document> enhanceDocuments(List<Document> documents) {
+    private List<Document> enhanceDocuments(List<Document> documents, boolean isSourceCode) {
+        if (isSourceCode) {
+            // 源码chunk已有上下文头，不需要额外驼峰增强
+            return documents;
+        }
         return documents.stream()
                 .map(doc -> {
                     String text = doc.getText();
@@ -200,17 +247,19 @@ public class DocumentEtlService {
     /**
      * 为每个文档chunk生成中文摘要并存入metadata的chinese_summary字段。
      * 摘要用空格分词格式输出，使RedisSearch的TEXT字段能按词匹配中文查询。
-     * 例如: chunk包含logRecordBackupFilePath → metadata.chinese_summary = "日志 记录 备份 文件 路径 配置项 logRecordBackupFilePath"
      * 摘要不写入content，避免稀释原文的embedding质量。
+     *
+     * @param documents  待处理的文档列表
+     * @param systemPrompt LLM摘要prompt（配置文档/源码各不同）
      */
-    private List<Document> generateChineseSummaries(List<Document> documents) {
+    private List<Document> generateChineseSummaries(List<Document> documents, String systemPrompt) {
         List<Document> result = new ArrayList<>();
         int successCount = 0;
         for (int i = 0; i < documents.size(); i++) {
             Document doc = documents.get(i);
             String text = doc.getText();
             try {
-                String summary = callLlmForSummary(text);
+                String summary = callLlmForSummary(text, systemPrompt);
                 if (summary != null && !summary.isBlank()) {
                     Map<String, Object> newMetadata = new HashMap<>(doc.getMetadata());
                     newMetadata.put("chinese_summary", summary);
@@ -233,10 +282,10 @@ public class DocumentEtlService {
     /**
      * 调用LLM为单个chunk生成空格分词格式的中文摘要
      */
-    private String callLlmForSummary(String chunkText) {
+    private String callLlmForSummary(String chunkText, String systemPrompt) {
         String input = chunkText.length() > 1500 ? chunkText.substring(0, 1500) + "..." : chunkText;
         Prompt prompt = new Prompt(List.of(
-                new SystemMessage(SUMMARY_SYSTEM_PROMPT),
+                new SystemMessage(systemPrompt),
                 new UserMessage(input)
         ));
         ChatResponse response = chatModel.call(prompt);
@@ -254,6 +303,12 @@ public class DocumentEtlService {
         } else if (fileName.endsWith(".md")) {
             // Markdown 文件使用标题语义分块
             return loadMarkdownAndSplit(file, extraMetadata);
+        } else if (fileName.endsWith(".java")) {
+            // Java 文件使用语义分块（按类/方法边界切分）
+            return loadJavaAndSplit(file, extraMetadata);
+        } else if (PomFileSplitter.isPomFileName(fileName)) {
+            // POM 文件使用结构化分块（按dependency/plugin边界切分）
+            return loadPomAndSplit(file, extraMetadata);
         } else {
             return loadSingleFileAndSplit(file, extraMetadata);
         }
@@ -274,17 +329,32 @@ public class DocumentEtlService {
     }
 
     /**
+     * 加载Java文件并按语义边界分块（类/方法级别）
+     * 每个方法作为独立chunk，携带作用域链、方法签名、import等上下文
+     */
+    private List<Document> loadJavaAndSplit(File file, Map<String, Object> extraMetadata) {
+        Map<String, Object> metadata = extraMetadata != null ? new HashMap<>(extraMetadata) : new HashMap<>();
+        // JavaCodeSplitter会自动提取package_name/class_name/method_name/scope_chain/imports
+        return javaCodeSplitter.split(file, metadata);
+    }
+
+    /**
+     * 加载POM文件并按结构化边界分块（dependency/plugin级别）
+     * 每个dependency独立chunk，携带项目GAV上下文
+     */
+    private List<Document> loadPomAndSplit(File file, Map<String, Object> extraMetadata) {
+        Map<String, Object> metadata = extraMetadata != null ? new HashMap<>(extraMetadata) : new HashMap<>();
+        // PomFileSplitter会自动提取pom_groupId/pom_artifactId/pom_version/pom_dependencies
+        return pomFileSplitter.split(file, metadata);
+    }
+
+    /**
      * 加载单个文本/源码文件并分块
+     * 注意：POM文件已路由到loadPomAndSplit，此方法处理其他文本文件
      */
     private List<Document> loadSingleFileAndSplit(File file, Map<String, Object> extraMetadata) {
         TextReader textReader = new TextReader(new FileSystemResource(file));
         textReader.getCustomMetadata().putAll(extraMetadata != null ? extraMetadata : new HashMap<>());
-
-        // 对POM文件提取依赖元数据
-        String fileName = file.getName().toLowerCase();
-        if (fileName.endsWith(".pom") || fileName.equals("pom.xml")) {
-            extractPomMetadata(file.toPath(), textReader.getCustomMetadata());
-        }
 
         List<Document> documents = textReader.get();
         return textSplitter.apply(documents);
@@ -292,9 +362,10 @@ public class DocumentEtlService {
 
     /**
      * 加载压缩包中的源码文件并分块
-     * 遍历zip内所有文件，只处理支持的源码/文本格式
+     * 遍历压缩包内所有文件，只处理支持的源码/文本格式
+     * Java文件使用语义分块，其他文件使用TokenTextSplitter
      */
-    private List<Document> loadArchiveAndSplit(File zipFile, Map<String, Object> extraMetadata) {
+    private List<Document> loadArchiveAndSplit(File archiveFile, Map<String, Object> extraMetadata) {
         List<Document> allDocuments = new ArrayList<>();
         Path tempDir;
 
@@ -305,7 +376,7 @@ public class DocumentEtlService {
         }
 
         try {
-            unzipFile(zipFile, tempDir);
+            extractArchive(archiveFile, tempDir);
 
             // 遍历解压后的所有文件
             try (Stream<Path> paths = Files.walk(tempDir)) {
@@ -317,26 +388,24 @@ public class DocumentEtlService {
                         .forEach(path -> {
                             try {
                                 Map<String, Object> fileMetadata = new HashMap<>(extraMetadata != null ? extraMetadata : new HashMap<>());
-                                // 记录zip内的相对路径，便于溯源
+                                // 记录压缩包内的相对路径，便于溯源
                                 String relativePath = tempDir.relativize(path).toString().replace('\\', '/');
                                 fileMetadata.put("source", fileMetadata.getOrDefault("source", "") + "/" + relativePath);
 
-                                // 提取包名和类名（针对Java文件）
                                 if (path.toString().endsWith(".java")) {
-                                    extractJavaMetadata(path, fileMetadata);
+                                    // Java文件使用语义分块
+                                    allDocuments.addAll(javaCodeSplitter.split(path.toFile(), fileMetadata));
+                                } else if (PomFileSplitter.isPomFileName(path.getFileName().toString())) {
+                                    // POM文件使用结构化分块
+                                    allDocuments.addAll(pomFileSplitter.split(path.toFile(), fileMetadata));
+                                } else {
+                                    TextReader textReader = new TextReader(new FileSystemResource(path.toFile()));
+                                    textReader.getCustomMetadata().putAll(fileMetadata);
+                                    List<Document> docs = textReader.get();
+                                    allDocuments.addAll(textSplitter.apply(docs));
                                 }
-                                // 提取POM依赖信息
-                                if (path.getFileName().toString().toLowerCase().endsWith(".pom")
-                                        || path.getFileName().toString().equals("pom.xml")) {
-                                    extractPomMetadata(path, fileMetadata);
-                                }
-
-                                TextReader textReader = new TextReader(new FileSystemResource(path.toFile()));
-                                textReader.getCustomMetadata().putAll(fileMetadata);
-                                List<Document> docs = textReader.get();
-                                allDocuments.addAll(textSplitter.apply(docs));
                             } catch (Exception e) {
-                                // 单文件失败不影响其他文件
+                                log.warn("压缩包内文件处理失败: {} - {}", path.getFileName(), e.getMessage());
                             }
                         });
             }
@@ -347,28 +416,6 @@ public class DocumentEtlService {
         }
 
         return allDocuments;
-    }
-
-    /**
-     * 从Java源码文件中提取包名和类名，写入metadata
-     */
-    private void extractJavaMetadata(Path javaFile, Map<String, Object> metadata) {
-        try {
-            String content = Files.readString(javaFile, StandardCharsets.UTF_8);
-            // 提取包名
-            for (String line : content.split("\n")) {
-                String trimmed = line.trim();
-                if (trimmed.startsWith("package ")) {
-                    String packageName = trimmed.substring(8).replace(";", "").trim();
-                    metadata.put("package_name", packageName);
-                    break;
-                }
-            }
-            // 提取类名（从文件名）
-            String fileName = javaFile.getFileName().toString();
-            metadata.put("class_name", fileName.replace(".java", ""));
-        } catch (Exception ignored) {
-        }
     }
 
     /**
@@ -457,6 +504,18 @@ public class DocumentEtlService {
     }
 
     /**
+     * 解压压缩文件到目标目录（支持zip和7z）
+     */
+    private void extractArchive(File archiveFile, Path targetDir) throws IOException {
+        String name = archiveFile.getName().toLowerCase();
+        if (name.endsWith(".7z")) {
+            extract7zArchive(archiveFile, targetDir);
+        } else {
+            unzipFile(archiveFile, targetDir);
+        }
+    }
+
+    /**
      * 解压zip文件到目标目录
      */
     private void unzipFile(File zipFile, Path targetDir) throws IOException {
@@ -479,6 +538,96 @@ public class DocumentEtlService {
                 zis.closeEntry();
             }
         }
+    }
+
+    /**
+     * 解压7z文件到目标目录（调用系统7z命令）
+     */
+    private void extract7zArchive(File archive7z, Path targetDir) throws IOException {
+        // 尝试常见的7z安装路径
+        String[] sevenZipPaths = {
+                "C:\\Program Files\\7-Zip\\7z.exe",
+                "C:\\Program Files (x86)\\7-Zip\\7z.exe",
+                "/usr/bin/7z",
+                "/usr/local/bin/7z"
+        };
+
+        String sevenZipExe = null;
+        for (String path : sevenZipPaths) {
+            if (new File(path).exists()) {
+                sevenZipExe = path;
+                break;
+            }
+        }
+
+        if (sevenZipExe == null) {
+            throw new IOException("未找到7z程序，无法解压.7z文件。请安装7-Zip: https://7-zip.org/");
+        }
+
+        try {
+            ProcessBuilder pb = new ProcessBuilder(
+                    sevenZipExe, "x", archive7z.getAbsolutePath(),
+                    "-o" + targetDir.toString(), "-y"
+            );
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            int exitCode = p.waitFor();
+            if (exitCode != 0) {
+                throw new IOException("7z解压失败，退出码: " + exitCode);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("7z解压被中断: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 判断压缩包是否包含Java文件（用于决定增强策略）
+     */
+    private boolean hasJavaFiles(File archiveFile) {
+        String name = archiveFile.getName().toLowerCase();
+        if (name.endsWith(".java")) return true;
+
+        // 简单判断：如果文件名包含java相关关键词
+        // 对于压缩包，解压后会在loadArchiveAndSplit中逐一判断，此处仅做粗略估计
+        return false;
+    }
+
+    /**
+     * 判断文件是否为源码/POM文件（需要跳过驼峰增强的文件类型）
+     * Java源码chunk已有上下文头，POM标识符用连字符不需要驼峰增强
+     */
+    private boolean isSourceCodeFile(File file) {
+        String name = file.getName().toLowerCase();
+        return name.endsWith(".java")
+                || PomFileSplitter.isPomFileName(name)
+                || (isArchive(name) && hasJavaOrPomFiles(file));
+    }
+
+    /**
+     * 判断压缩包是否包含Java或POM文件
+     */
+    private boolean hasJavaOrPomFiles(File archiveFile) {
+        // 粗略判断：压缩包通常包含源码文件，解压后会逐一判断
+        // 此处保守返回false，由loadArchiveAndSplit内部逐文件路由
+        return false;
+    }
+
+    /**
+     * 根据文件类型选择摘要prompt
+     * - Java源码 → CODE_SUMMARY_SYSTEM_PROMPT（聚焦功能描述）
+     * - POM文件 → POM_SUMMARY_SYSTEM_PROMPT（聚焦依赖关系）
+     * - 其他 → SUMMARY_SYSTEM_PROMPT（配置文档摘要）
+     */
+    private String chooseSummaryPrompt(File file, boolean isSourceCode) {
+        if (!isSourceCode) {
+            return SUMMARY_SYSTEM_PROMPT;
+        }
+        String name = file.getName().toLowerCase();
+        if (PomFileSplitter.isPomFileName(name)) {
+            return POM_SUMMARY_SYSTEM_PROMPT;
+        }
+        return CODE_SUMMARY_SYSTEM_PROMPT;
     }
 
     /**
