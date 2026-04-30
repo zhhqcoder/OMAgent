@@ -1,5 +1,5 @@
 # OMAgent 停止脚本
-# 用法: .\stop.ps1
+# 用法: .\scripts\stop.ps1 （从项目根目录执行）
 
 $process = Get-Process -Name "java" -ErrorAction SilentlyContinue
 if ($process) {

@@ -2,6 +2,7 @@ package com.eastcom.omagent.service;
 
 import com.eastcom.omagent.entity.UploadFile;
 import com.eastcom.omagent.rag.DocumentEtlService;
+import com.eastcom.omagent.rag.KnowledgeBaseService;
 import com.eastcom.omagent.repository.UploadFileRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -23,14 +24,17 @@ public class FileService {
 
     private final UploadFileRepository uploadFileRepository;
     private final DocumentEtlService documentEtlService;
+    private final KnowledgeBaseService knowledgeBaseService;
 
     @Value("${omagent.upload.dir:./uploads}")
     private String uploadDir;
 
     public FileService(UploadFileRepository uploadFileRepository,
-                       DocumentEtlService documentEtlService) {
+                       DocumentEtlService documentEtlService,
+                       KnowledgeBaseService knowledgeBaseService) {
         this.uploadFileRepository = uploadFileRepository;
         this.documentEtlService = documentEtlService;
+        this.knowledgeBaseService = knowledgeBaseService;
     }
 
     /**
@@ -86,6 +90,7 @@ public class FileService {
 
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("source", uploadFile.getOriginalName());
+        metadata.put("file_id", uploadFile.getId());
         if (docType != null) {
             metadata.put("doc_type", docType);
         }
@@ -143,9 +148,91 @@ public class FileService {
      */
     public Map<String, Long> getKnowledgeStats() {
         Map<String, Long> stats = new HashMap<>();
-        stats.put("configTotal", uploadFileRepository.countByKnowledgeType("config"));
-        stats.put("sourceTotal", uploadFileRepository.countByKnowledgeType("source"));
+        stats.put("configTotal", uploadFileRepository.countByKnowledgeTypeAndVectorizedTrue("config"));
+        stats.put("sourceTotal", uploadFileRepository.countByKnowledgeTypeAndVectorizedTrue("source"));
         return stats;
+    }
+
+    /**
+     * 重新向量化文件（先删旧向量，再重新导入）
+     * @param fileId 文件ID
+     * @param knowledgeType 知识库类型（可选，不传则使用文件原有类型）
+     * @param docType 文档类型（可选）
+     * @param module 模块名（可选）
+     * @return 导入的文档块数量
+     */
+    @Transactional
+    public int reimportToKnowledge(String fileId, String knowledgeType, String docType, String module) {
+        UploadFile uploadFile = uploadFileRepository.findById(fileId)
+                .orElseThrow(() -> new RuntimeException("文件不存在: " + fileId));
+
+        // 如果已向量化，先删除旧向量数据
+        if (uploadFile.getVectorized()) {
+            knowledgeBaseService.deleteDocumentVectors(fileId, uploadFile.getKnowledgeType());
+        }
+
+        // 重新导入
+        return importToKnowledge(fileId, knowledgeType, docType, module);
+    }
+
+    /**
+     * 删除单个文件及其向量数据
+     * 1. 删除Redis中该文件的所有向量数据
+     * 2. 删除数据库中的文件记录
+     * 3. 删除物理文件
+     * @param fileId 文件ID
+     * @return 删除的向量文档数量
+     */
+    @Transactional
+    public int deleteFile(String fileId) {
+        UploadFile uploadFile = uploadFileRepository.findById(fileId)
+                .orElseThrow(() -> new RuntimeException("文件不存在: " + fileId));
+
+        int deletedCount = 0;
+        // 只有已向量化的文件才需要从Redis删除
+        if (uploadFile.getVectorized()) {
+            String knowledgeType = uploadFile.getKnowledgeType();
+            deletedCount = knowledgeBaseService.deleteDocumentVectors(fileId, knowledgeType);
+        }
+
+        // 删除物理文件
+        try {
+            Path path = Paths.get(uploadFile.getFilePath());
+            Files.deleteIfExists(path);
+        } catch (IOException e) {
+            // 物理文件删除失败不影响主流程
+        }
+
+        // 删除数据库记录
+        uploadFileRepository.delete(uploadFile);
+
+        return deletedCount;
+    }
+
+    /**
+     * 清空指定知识库
+     * 1. 删除Redis中该知识库的所有向量数据并重建索引
+     * 2. 将数据库中对应文件的vectorized标记重置
+     * @param knowledgeType "config" 或 "source"
+     * @return 清空的文档数量
+     */
+    @Transactional
+    public int clearKnowledge(String knowledgeType) {
+        int deletedCount;
+        if ("source".equals(knowledgeType)) {
+            deletedCount = knowledgeBaseService.clearSourceStore();
+        } else {
+            deletedCount = knowledgeBaseService.clearConfigStore();
+        }
+
+        // 重置数据库中对应文件的向量化状态
+        List<UploadFile> files = uploadFileRepository.findByKnowledgeType(knowledgeType);
+        for (UploadFile file : files) {
+            file.setVectorized(false);
+        }
+        uploadFileRepository.saveAll(files);
+
+        return deletedCount;
     }
 
     private String determineFileType(String filename) {
@@ -164,8 +251,6 @@ public class FileService {
             return "zip";
         } else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") || lower.endsWith(".webp")) {
             return "image";
-        } else if (lower.endsWith(".doc") || lower.endsWith(".docx")) {
-            return "doc";
         } else if (lower.endsWith(".pdf")) {
             return "pdf";
         }

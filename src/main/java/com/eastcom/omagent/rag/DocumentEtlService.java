@@ -1,5 +1,12 @@
 package com.eastcom.omagent.rag;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.TextReader;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
@@ -7,14 +14,6 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.stereotype.Service;
-import org.apache.poi.xwpf.usermodel.XWPFDocument;
-import org.apache.poi.xwpf.usermodel.XWPFParagraph;
-import org.apache.poi.xwpf.usermodel.XWPFTable;
-import org.apache.poi.xwpf.usermodel.XWPFTableRow;
-import org.apache.poi.xwpf.usermodel.XWPFTableCell;
-import org.apache.poi.hwpf.HWPFDocument;
-import org.apache.poi.hwpf.extractor.WordExtractor;
-
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
@@ -26,9 +25,29 @@ import java.util.zip.ZipInputStream;
 @Service
 public class DocumentEtlService {
 
+    private static final Logger log = LoggerFactory.getLogger(DocumentEtlService.class);
+
     private final VectorStore configVectorStore;
     private final VectorStore sourceVectorStore;
     private final TokenTextSplitter textSplitter;
+    private final MarkdownSectionSplitter markdownSplitter;
+    private final ChatModel chatModel;
+
+    /** LLM生成中文摘要的system prompt，要求空格分词输出 */
+    private static final String SUMMARY_SYSTEM_PROMPT = """
+            你是一个技术文档中文摘要生成器。根据给定的技术配置文档片段，输出中文摘要。
+            关键要求：
+            1. 提取文档中涉及的配置项名称（保留原始英文标识符）
+            2. 用中文说明每个配置项的功能和用途
+            3. 提及关键取值、默认值或格式要求（如有）
+            4. 每个中文词语之间必须用空格分隔（这是最关键的要求）
+            5. 不超过150字
+            6. 只输出空格分词的摘要内容，不要输出其他解释
+            7. 必须包含文档中出现的中文领域术语（如"局数据"、"告警"、"割接"等），这些术语是检索的关键锚点
+            8. 如果文档描述的是某个模块的配置，必须包含该模块的中文名称和英文名称
+            9. 中文分词粒度：保持有意义的中文词组完整，不要拆成单字。例如"软件包管理"应输出为"软件包 管理"而不是"软 件 包 管 理"，"局数据"应输出为"局数据"而不是"局 数 据"，"告警级别"应输出为"告警级别"而不是"告 警 级 别"
+            示例输出：局数据 bureaudata ftp 模式 配置项 ftpMode 地址 账号 密码 端口 路径 日志记录 备份文件 logRecordBackupFilePath
+            """;
 
     /** 支持的源码文件扩展名 */
     private static final Set<String> SOURCE_CODE_EXTENSIONS = Set.of(
@@ -43,27 +62,32 @@ public class DocumentEtlService {
             ".txt", ".log", ".csv", ".md"
     );
 
-    /** 支持的文档文件扩展名（需要专用解析器） */
-    private static final Set<String> DOCUMENT_EXTENSIONS = Set.of(
-            ".doc", ".docx"
-    );
-
     /** 支持的压缩包扩展名 */
     private static final Set<String> ARCHIVE_EXTENSIONS = Set.of(
             ".zip"
     );
 
+    /** Embedding API 单次请求最大文本数（DashScope限制25） */
+    private static final int EMBEDDING_BATCH_SIZE = 20;
+
     public DocumentEtlService(
             @Qualifier("configVectorStore") VectorStore configVectorStore,
-            @Qualifier("sourceVectorStore") VectorStore sourceVectorStore) {
+            @Qualifier("sourceVectorStore") VectorStore sourceVectorStore,
+            ChatModel chatModel) {
         this.configVectorStore = configVectorStore;
         this.sourceVectorStore = sourceVectorStore;
+        this.chatModel = chatModel;
         this.textSplitter = new TokenTextSplitter(
                 800,    // chunkSize
                 200,    // overlap
                 50,     // minChunkSizeChars
                 10000,  // maxNumChunks
                 true
+        );
+        this.markdownSplitter = new MarkdownSectionSplitter(
+                3000,   // maxSectionChars - 超长章节最大字符数
+                200,    // overlapChars - 二次切分重叠
+                true    // skipToc - 跳过目录区域
         );
     }
 
@@ -73,7 +97,8 @@ public class DocumentEtlService {
     public int importToConfigStore(File file, Map<String, Object> metadata) {
         List<Document> documents = loadAndSplit(file, metadata);
         documents = enhanceDocuments(documents);
-        configVectorStore.add(documents);
+        documents = generateChineseSummaries(documents);
+        addInBatches(configVectorStore, documents);
         return documents.size();
     }
 
@@ -83,7 +108,8 @@ public class DocumentEtlService {
     public int importToSourceStore(File file, Map<String, Object> metadata) {
         List<Document> documents = loadAndSplit(file, metadata);
         documents = enhanceDocuments(documents);
-        sourceVectorStore.add(documents);
+        documents = generateChineseSummaries(documents);
+        addInBatches(sourceVectorStore, documents);
         return documents.size();
     }
 
@@ -93,7 +119,8 @@ public class DocumentEtlService {
     public int importDocumentsToConfigStore(List<Document> documents) {
         List<Document> splitDocs = textSplitter.apply(documents);
         splitDocs = enhanceDocuments(splitDocs);
-        configVectorStore.add(splitDocs);
+        splitDocs = generateChineseSummaries(splitDocs);
+        addInBatches(configVectorStore, splitDocs);
         return splitDocs.size();
     }
 
@@ -103,8 +130,20 @@ public class DocumentEtlService {
     public int importDocumentsToSourceStore(List<Document> documents) {
         List<Document> splitDocs = textSplitter.apply(documents);
         splitDocs = enhanceDocuments(splitDocs);
-        sourceVectorStore.add(splitDocs);
+        splitDocs = generateChineseSummaries(splitDocs);
+        addInBatches(sourceVectorStore, splitDocs);
         return splitDocs.size();
+    }
+
+    /**
+     * 分批写入向量库，避免超出 Embedding API 单次请求数量限制
+     */
+    private void addInBatches(VectorStore vectorStore, List<Document> documents) {
+        for (int i = 0; i < documents.size(); i += EMBEDDING_BATCH_SIZE) {
+            int end = Math.min(i + EMBEDDING_BATCH_SIZE, documents.size());
+            List<Document> batch = documents.subList(i, end);
+            vectorStore.add(batch);
+        }
     }
 
     /**
@@ -159,6 +198,52 @@ public class DocumentEtlService {
     }
 
     /**
+     * 为每个文档chunk生成中文摘要并存入metadata的chinese_summary字段。
+     * 摘要用空格分词格式输出，使RedisSearch的TEXT字段能按词匹配中文查询。
+     * 例如: chunk包含logRecordBackupFilePath → metadata.chinese_summary = "日志 记录 备份 文件 路径 配置项 logRecordBackupFilePath"
+     * 摘要不写入content，避免稀释原文的embedding质量。
+     */
+    private List<Document> generateChineseSummaries(List<Document> documents) {
+        List<Document> result = new ArrayList<>();
+        int successCount = 0;
+        for (int i = 0; i < documents.size(); i++) {
+            Document doc = documents.get(i);
+            String text = doc.getText();
+            try {
+                String summary = callLlmForSummary(text);
+                if (summary != null && !summary.isBlank()) {
+                    Map<String, Object> newMetadata = new HashMap<>(doc.getMetadata());
+                    newMetadata.put("chinese_summary", summary);
+                    result.add(new Document(doc.getId(), doc.getText(), newMetadata));
+                    successCount++;
+                    log.debug("chunk {}/{} 中文摘要: {}", i + 1, documents.size(),
+                            summary.length() > 80 ? summary.substring(0, 80) + "..." : summary);
+                } else {
+                    result.add(doc);
+                }
+            } catch (Exception e) {
+                log.warn("chunk {}/{} 生成中文摘要失败，跳过: {}", i + 1, documents.size(), e.getMessage());
+                result.add(doc);
+            }
+        }
+        log.info("中文摘要生成完成: {}/{} 成功", successCount, documents.size());
+        return result;
+    }
+
+    /**
+     * 调用LLM为单个chunk生成空格分词格式的中文摘要
+     */
+    private String callLlmForSummary(String chunkText) {
+        String input = chunkText.length() > 1500 ? chunkText.substring(0, 1500) + "..." : chunkText;
+        Prompt prompt = new Prompt(List.of(
+                new SystemMessage(SUMMARY_SYSTEM_PROMPT),
+                new UserMessage(input)
+        ));
+        ChatResponse response = chatModel.call(prompt);
+        return response.getResult().getOutput().getText();
+    }
+
+    /**
      * 根据文件类型自动选择加载方式
      */
     private List<Document> loadAndSplit(File file, Map<String, Object> extraMetadata) {
@@ -166,13 +251,25 @@ public class DocumentEtlService {
 
         if (isArchive(fileName)) {
             return loadArchiveAndSplit(file, extraMetadata);
-        } else if (isDocument(fileName)) {
-            return loadDocxAndSplit(file, extraMetadata);
-        } else if (isSourceCode(fileName) || isTextFile(fileName)) {
-            return loadSingleFileAndSplit(file, extraMetadata);
+        } else if (fileName.endsWith(".md")) {
+            // Markdown 文件使用标题语义分块
+            return loadMarkdownAndSplit(file, extraMetadata);
         } else {
-            // 兜底：尝试作为文本文件读取
             return loadSingleFileAndSplit(file, extraMetadata);
+        }
+    }
+
+    /**
+     * 加载 Markdown 文件并按标题语义分块
+     * 每个子章节（##/###）作为独立 chunk，保留完整表格和代码块
+     */
+    private List<Document> loadMarkdownAndSplit(File file, Map<String, Object> extraMetadata) {
+        try {
+            String content = Files.readString(file.toPath(), StandardCharsets.UTF_8);
+            Map<String, Object> metadata = extraMetadata != null ? new HashMap<>(extraMetadata) : new HashMap<>();
+            return markdownSplitter.split(content, metadata);
+        } catch (IOException e) {
+            throw new RuntimeException("读取Markdown文件失败: " + e.getMessage(), e);
         }
     }
 
@@ -215,7 +312,7 @@ public class DocumentEtlService {
                 paths.filter(Files::isRegularFile)
                         .filter(p -> {
                             String name = p.getFileName().toString().toLowerCase();
-                            return isSourceCode(name) || isTextFile(name) || isDocument(name);
+                            return isSourceCode(name) || isTextFile(name);
                         })
                         .forEach(path -> {
                             try {
@@ -234,15 +331,9 @@ public class DocumentEtlService {
                                     extractPomMetadata(path, fileMetadata);
                                 }
 
-                                List<Document> docs;
-                                if (isDocument(path.getFileName().toString().toLowerCase())) {
-                                    // DOCX文件需要专用解析
-                                    docs = loadDocxFromPath(path, fileMetadata);
-                                } else {
-                                    TextReader textReader = new TextReader(new FileSystemResource(path.toFile()));
-                                    textReader.getCustomMetadata().putAll(fileMetadata);
-                                    docs = textReader.get();
-                                }
+                                TextReader textReader = new TextReader(new FileSystemResource(path.toFile()));
+                                textReader.getCustomMetadata().putAll(fileMetadata);
+                                List<Document> docs = textReader.get();
                                 allDocuments.addAll(textSplitter.apply(docs));
                             } catch (Exception e) {
                                 // 单文件失败不影响其他文件
@@ -416,116 +507,6 @@ public class DocumentEtlService {
         return TEXT_EXTENSIONS.stream().anyMatch(fileName::endsWith);
     }
 
-    private boolean isDocument(String fileName) {
-        return DOCUMENT_EXTENSIONS.stream().anyMatch(fileName::endsWith);
-    }
-
-    /**
-     * 加载DOCX文件并分块
-     * 使用Apache POI解析Word文档，提取段落文本
-     */
-    /**
-     * 加载Word文档并分块（支持.doc和.docx）
-     */
-    private List<Document> loadDocxAndSplit(File file, Map<String, Object> extraMetadata) {
-        String content = extractWordText(file);
-        if (content == null || content.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        Map<String, Object> metadata = new HashMap<>(extraMetadata != null ? extraMetadata : new HashMap<>());
-        Document document = new Document(content, metadata);
-        return textSplitter.apply(List.of(document));
-    }
-
-    /**
-     * 从Path加载Word文档（用于zip内的doc/docx文件）
-     */
-    private List<Document> loadDocxFromPath(Path path, Map<String, Object> extraMetadata) {
-        String content = extractWordText(path.toFile());
-        if (content == null || content.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        Map<String, Object> metadata = new HashMap<>(extraMetadata != null ? extraMetadata : new HashMap<>());
-        Document document = new Document(content, metadata);
-        return List.of(document);
-    }
-
-    /**
-     * 提取Word文档文本，自动识别.doc(HWPF)和.docx(XWPF)格式
-     * 同时提取段落文本和表格内容，确保表格中的数据不会丢失
-     */
-    private String extractWordText(File file) {
-        String fileName = file.getName().toLowerCase();
-        try {
-            if (fileName.endsWith(".docx")) {
-                // .docx格式 - XWPFDocument，提取段落+表格
-                try (FileInputStream fis = new FileInputStream(file);
-                     XWPFDocument doc = new XWPFDocument(fis)) {
-                    StringBuilder sb = new StringBuilder();
-                    // 提取段落
-                    for (XWPFParagraph paragraph : doc.getParagraphs()) {
-                        String text = paragraph.getText();
-                        if (text != null && !text.trim().isEmpty()) {
-                            sb.append(text).append("\n");
-                        }
-                    }
-                    // 提取表格
-                    for (XWPFTable table : doc.getTables()) {
-                        for (XWPFTableRow row : table.getRows()) {
-                            List<String> cellTexts = new ArrayList<>();
-                            for (XWPFTableCell cell : row.getTableCells()) {
-                                String cellText = cell.getText();
-                                if (cellText != null && !cellText.trim().isEmpty()) {
-                                    cellTexts.add(cellText.trim());
-                                }
-                            }
-                            if (!cellTexts.isEmpty()) {
-                                sb.append(String.join("\t", cellTexts)).append("\n");
-                            }
-                        }
-                    }
-                    return sb.toString();
-                }
-            } else if (fileName.endsWith(".doc")) {
-                // .doc格式 - HWPFDocument
-                // 使用Range遍历所有段落（包括表格内的段落）
-                // 不依赖isInTable()判断，因为某些表格段落该方法返回false
-                // 通过\u0007字符识别表格单元格边界
-                try (FileInputStream fis = new FileInputStream(file);
-                     HWPFDocument doc = new HWPFDocument(fis)) {
-                    StringBuilder sb = new StringBuilder();
-                    org.apache.poi.hwpf.usermodel.Range range = doc.getRange();
-
-                    for (int i = 0; i < range.numParagraphs(); i++) {
-                        org.apache.poi.hwpf.usermodel.Paragraph p = range.getParagraph(i);
-                        String text = p.text();
-                        if (text == null || text.trim().isEmpty()) {
-                            continue;
-                        }
-                        // \u0007是Word表格单元格结束符
-                        // 将\u0007替换为制表符，保持表格结构可读
-                        text = text.replace("\u0007", "\t");
-                        // 清理回车符
-                        text = text.replace("\r", "");
-                        // 合并连续制表符为单个
-                        text = text.replaceAll("\t{2,}", "\t");
-                        text = text.trim();
-                        if (!text.isEmpty()) {
-                            sb.append(text).append("\n");
-                        }
-                    }
-
-                    return sb.toString();
-                }
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("解析Word文档失败: " + file.getName() + " - " + e.getMessage(), e);
-        }
-        return null;
-    }
-
     /**
      * 获取所有支持的文件扩展名（用于前端展示）
      */
@@ -533,7 +514,6 @@ public class DocumentEtlService {
         Set<String> all = new TreeSet<>();
         all.addAll(TEXT_EXTENSIONS);
         all.addAll(SOURCE_CODE_EXTENSIONS);
-        all.addAll(DOCUMENT_EXTENSIONS);
         all.addAll(ARCHIVE_EXTENSIONS);
         return String.join(", ", all);
     }

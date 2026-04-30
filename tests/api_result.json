@@ -1,0 +1,31 @@
+﻿
+
+sessionId : 3addf485-6955-4ae4-bb6e-035b09a872f6
+messageId : 52b90bd7-8bb4-451d-be22-807982034d4c
+role      : assistant
+content   : {"OverAllState":{"data":{"_graph_execution_id_":"6efe97a2-2b99-4967-82a5-9014c080ca37","input":"logRecordBa
+            ckupFilePathæ¯ä»ä¹","messages":[{"messageType":"USER","metadata":{"messageType":"USER"},"media":[],"text
+            ":"logRecordBackupFilePathæ¯ä»ä¹"},{"messageType":"ASSISTANT","metadata":{"search_info":"","role":"ASSIS
+            TANT","messageType":"ASSISTANT","finishReason":"TOOL_CALLS","id":"f54ce6cb-c513-9fa8-95ba-8fe316e9ba02","re
+            asoningContent":""},"toolCalls":[{"id":"call_94a5da6489e941aca3c249","type":"function","name":"search_confi
+            g","arguments":"{\"query\": \"logRecordBackupFilePath\", \"module\": \"\", \"docType\": \"config-guide\"}"}
+            ],"media":[],"text":"æéè¦æ¥æ¾ `logRecordBackupFilePath` éç½®é¡¹çç¸å³ä¿¡æ¯ãè¿æ¯ä¸ä¸ªéç½
+            ®é¡¹æ¥è¯¢é®é¢ï¼æå°é¦åä½¿ç¨ search_config å·¥å·å¨éç½®ç¥è¯åºä¸­æç´¢ã\n\n"},{"messageTyp
+            e":"TOOL","metadata":{"messageType":"TOOL"},"responses":[{"id":"call_94a5da6489e941aca3c249","name":"search
+            _config","responseData":"{\"content\":\"ãæ¥æº: æªç¥æ¥æºã\\n\",\"sources\":[\"æªç¥\"]}"}],"text"
+            :""},{"messageType":"ASSISTANT","metadata":{"search_info":"","role":"ASSISTANT","messageType":"ASSISTANT","
+            finishReason":"TOOL_CALLS","id":"232a5fe5-a595-9f61-9f14-106d63f8c211","reasoningContent":""},"toolCalls":[
+            {"id":"call_abef16f9c49e4e3db14383","type":"function","name":"analyze_log","arguments":"{\"query\": \"logRe
+            cordBackupFilePath\", \"module\": \"\", \"docType\": \"source-code\"}"}],"media":[],"text":"éç½®ç¥è¯åº
+            ä¸­æªæ¾å° `logRecordBackupFilePath` çç¸å³ä¿¡æ¯ãæ¥ä¸æ¥æå°ä½¿ç¨ analyze_log å·¥å·å¨ä»£ç å
+            ºä¸­æç´¢è¯¥éç½®é¡¹ï¼ä»¥åæå¶å®ä¹åç¨æ³ã\n\n"},{"messageType":"TOOL","metadata":{"messageTy
+            pe":"TOOL"},"responses":[{"id":"call_abef16f9c49e4e3db14383","name":"analyze_log","responseData":"{\"source
+            Content\":\"\",\"configContent\":\"ãæ¥æº: æªç¥æ¥æºã\\n\",\"sources\":[\"æªç¥\"]}"}],"text":""},
+            {"messageType":"ASSISTANT","metadata":{"search_info":"","role":"ASSISTANT","messageType":"ASSISTANT","finis
+            hReason":"STOP","id":"6a2b86ff-472f-97b1-8807-ce460dcbacd3","reasoningContent":""},"toolCalls":[],"media":[
+            ],"text":"éç½®ç¥è¯åºåä»£ç åºä¸­åæªæ¾å°æ­¤éç½®çç¸å³ä¿¡æ¯ï¼è¯·æ¥éå®æ¹ææ¡£æèç
+            ³»ææ¯æ¯æã"}]}}}
+sources   : 
+
+
+

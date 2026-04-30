@@ -1,0 +1,15 @@
+﻿
+
+sessionId : ea99a184-0504-4245-8eca-e4712fb5b110
+messageId : 11085217-d701-4142-a9a1-3fd2c1bc5126
+role      : assistant
+content   : {"OverAllState":{"data":{"_graph_execution_id_":"42f5fbe2-6ccb-4052-b340-6d3b9d1e6c5d","input":"éå­è®¡ç®
+            å¨OMSä¸­çåºç¨","messages":[{"messageType":"USER","metadata":{"messageType":"USER"},"media":[],"text":
+            "éå­è®¡ç®å¨OMSä¸­çåºç¨"},{"messageType":"ASSISTANT","metadata":{"search_info":"","role":"ASSISTANT
+            ","messageType":"ASSISTANT","finishReason":"STOP","id":"59b45190-3d76-98c1-9e48-5c9cb8fd73d7","reasoningCon
+            tent":""},"toolCalls":[],"media":[],"text":"éç½®ç¥è¯åºåä»£ç åºä¸­åæªæ¾å°æ­¤éç½®çç¸å³ä¿¡
+            æ¯ï¼è¯·æ¥éå®æ¹ææ¡£æèç³»ææ¯æ¯æã"}]}}}
+sources   : 
+
+
+

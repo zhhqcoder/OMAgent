@@ -43,6 +43,16 @@ public class LogAnalysisTool {
                 request.query(), 3, request.module(), request.docType()
         );
 
+        // 方案4：两个知识库都无结果时返回友好提示
+        if (sourceResults.isEmpty() && configResults.isEmpty()) {
+            return new Response(
+                    "未在知识库中找到与「" + request.query() + "」相关的源码或配置信息。" +
+                    "建议：1. 检查关键词是否正确；2. 尝试使用更通用的关键词；3. 上传相关源码或配置文档后再试。",
+                    "",
+                    List.of()
+            );
+        }
+
         String sourceContent = knowledgeBaseService.formatSearchResults(sourceResults);
         String configContent = knowledgeBaseService.formatSearchResults(configResults);
 

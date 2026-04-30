@@ -11,7 +11,7 @@ spring:
       api-key: sk-63c8a929280b433ea4f9138834cd5413
       chat:
         options:
-          model: qwen-plus
+          model: deepseek-v3.1
           temperature: 0.7
           top-p: 0.9
           max-tokens: 4096
@@ -81,6 +81,8 @@ omagent:
     allowed-types: image/jpeg,image/png,image/webp
 
 logging:
+  file:
+    name: logs/start.log
   level:
     com.eastcom.omagent: DEBUG
     org.springframework.ai: DEBUG

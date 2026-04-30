@@ -17,14 +17,19 @@
             <div class="w-10 h-10 rounded-xl bg-primary/15 flex items-center justify-center">
               <Settings :size="20" class="text-primary" />
             </div>
-            <div>
+            <div class="flex-1">
               <h3 class="text-sm font-medium text-[#F0F0F0]">配置知识库</h3>
               <p class="text-xs text-[#8C8C8C]">配置说明书、配置模板、参数范围</p>
             </div>
+            <button @click="confirmClear('config')" :disabled="clearing"
+              class="p-2 rounded-lg hover:bg-danger/10 text-[#8C8C8C] hover:text-danger transition-colors disabled:opacity-30"
+              title="清空配置知识库">
+              <Trash2 :size="16" />
+            </button>
           </div>
           <div class="flex items-center justify-between">
             <span class="text-2xl font-bold text-primary">{{ knowledgeStats.configTotal || 0 }}</span>
-            <span class="text-xs text-[#8C8C8C]">文档数</span>
+            <span class="text-xs text-[#8C8C8C]">已导入文档</span>
           </div>
         </div>
 
@@ -34,16 +39,26 @@
             <div class="w-10 h-10 rounded-xl bg-success/15 flex items-center justify-center">
               <Code :size="20" class="text-success" />
             </div>
-            <div>
+            <div class="flex-1">
               <h3 class="text-sm font-medium text-[#F0F0F0]">源码/日志知识库</h3>
               <p class="text-xs text-[#8C8C8C]">源码片段、FAQ、日志模式</p>
             </div>
+            <button @click="confirmClear('source')" :disabled="clearing"
+              class="p-2 rounded-lg hover:bg-danger/10 text-[#8C8C8C] hover:text-danger transition-colors disabled:opacity-30"
+              title="清空源码/日志知识库">
+              <Trash2 :size="16" />
+            </button>
           </div>
           <div class="flex items-center justify-between">
             <span class="text-2xl font-bold text-success">{{ knowledgeStats.sourceTotal || 0 }}</span>
-            <span class="text-xs text-[#8C8C8C]">文档数</span>
+            <span class="text-xs text-[#8C8C8C]">已导入文档</span>
           </div>
         </div>
+      </div>
+
+      <!-- 清空结果提示 -->
+      <div v-if="clearResult" class="mb-6 p-3 rounded-lg text-sm" :class="clearResult.success ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'">
+        {{ clearResult.message }}
       </div>
 
       <!-- 导入面板 -->
@@ -71,9 +86,9 @@
         >
           <UploadCloud :size="32" class="mx-auto mb-3 text-[#8C8C8C]" />
           <p class="text-sm text-[#8C8C8C]">拖拽文件到此处，或点击选择文件</p>
-          <p class="text-xs text-[#8C8C8C]/50 mt-1">支持 .txt .log .csv .md .doc .docx .java .xml .yml .properties .sql .json .sh .pom .zip 等格式</p>
+          <p class="text-xs text-[#8C8C8C]/50 mt-1">支持 .txt .log .csv .md .java .xml .yml .properties .sql .json .sh .pom .zip 等格式</p>
         </div>
-        <input ref="uploadInput" type="file" accept=".txt,.log,.csv,.md,.doc,.docx,.java,.xml,.yml,.yaml,.properties,.sql,.json,.js,.ts,.html,.css,.sh,.pom,.zip" class="hidden" @change="handleFileSelect" />
+        <input ref="uploadInput" type="file" accept=".txt,.log,.csv,.md,.java,.xml,.yml,.yaml,.properties,.sql,.json,.js,.ts,.html,.css,.sh,.pom,.zip" class="hidden" @change="handleFileSelect" />
 
         <!-- 上传进度 -->
         <div v-if="uploading" class="mt-4">
@@ -101,7 +116,7 @@
         <div v-else class="space-y-2">
           <div v-for="file in uploadedFiles" :key="file.id"
             class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/5 transition-colors">
-            <FileText :size="16" class="text-[#8C8C8C]" />
+            <FileText :size="16" class="text-[#8C8C8C] shrink-0" />
             <div class="flex-1 min-w-0">
               <div class="text-sm text-[#D9D9D9] truncate">{{ file.originalName }}</div>
               <div class="text-[10px] text-[#8C8C8C]">
@@ -111,6 +126,16 @@
             <div class="flex items-center gap-2">
               <span v-if="file.vectorized" class="text-[10px] px-2 py-0.5 rounded-full bg-success/10 text-success">已向量化</span>
               <span v-else class="text-[10px] px-2 py-0.5 rounded-full bg-warning/10 text-warning">未处理</span>
+              <button @click="handleVectorize(file)" :disabled="vectorizing"
+                class="p-1.5 rounded-lg hover:bg-primary/10 text-[#8C8C8C] hover:text-primary transition-colors disabled:opacity-30"
+                :title="file.vectorized ? '重新向量化' : '向量化'">
+                <RefreshCw :size="14" :class="{ 'animate-spin': vectorizingFileId === file.id }" />
+              </button>
+              <button @click="confirmDeleteFile(file)" :disabled="deleting"
+                class="p-1.5 rounded-lg hover:bg-danger/10 text-[#8C8C8C] hover:text-danger transition-colors disabled:opacity-30"
+                title="删除文件">
+                <Trash2 :size="14" />
+              </button>
             </div>
           </div>
         </div>
@@ -121,7 +146,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { Settings, Code, UploadCloud, FileText } from 'lucide-vue-next'
+import { Settings, Code, UploadCloud, FileText, Trash2, RefreshCw } from 'lucide-vue-next'
 import { fileApi, knowledgeApi } from '../api/chat'
 
 const knowledgeStats = ref({})
@@ -134,6 +159,11 @@ const uploading = ref(false)
 const uploadProgress = ref(0)
 const uploadResult = ref(null)
 const uploadInput = ref(null)
+const clearing = ref(false)
+const clearResult = ref(null)
+const deleting = ref(false)
+const vectorizing = ref(false)
+const vectorizingFileId = ref(null)
 
 onMounted(async () => {
   await loadData()
@@ -210,5 +240,59 @@ function formatFileSize(bytes) {
     i++
   }
   return size.toFixed(1) + ' ' + units[i]
+}
+
+async function confirmClear(type) {
+  const name = type === 'config' ? '配置知识库' : '源码/日志知识库'
+  if (!confirm(`确定要清空「${name}」吗？此操作不可恢复！`)) return
+
+  clearing.value = true
+  clearResult.value = null
+  try {
+    const res = await knowledgeApi.clear(type)
+    clearResult.value = { success: true, message: res.data.message }
+    await loadData()
+  } catch (e) {
+    clearResult.value = { success: false, message: '清空失败: ' + (e.response?.data?.message || e.message) }
+  } finally {
+    clearing.value = false
+    // 3秒后自动隐藏提示
+    setTimeout(() => { clearResult.value = null }, 3000)
+  }
+}
+
+async function confirmDeleteFile(file) {
+  if (!confirm(`确定要删除文件「${file.originalName}」吗？将同时删除其向量数据，此操作不可恢复！`)) return
+
+  deleting.value = true
+  try {
+    const res = await knowledgeApi.deleteFile(file.id)
+    clearResult.value = { success: true, message: res.data.message }
+    await loadData()
+  } catch (e) {
+    clearResult.value = { success: false, message: '删除失败: ' + (e.response?.data?.message || e.message) }
+  } finally {
+    deleting.value = false
+    setTimeout(() => { clearResult.value = null }, 3000)
+  }
+}
+
+async function handleVectorize(file) {
+  const action = file.vectorized ? '重新向量化' : '向量化'
+  if (!confirm(`确定要对「${file.originalName}」执行${action}吗？`)) return
+
+  vectorizing.value = true
+  vectorizingFileId.value = file.id
+  try {
+    const res = await knowledgeApi.reimport(file.id)
+    clearResult.value = { success: true, message: res.data.message }
+    await loadData()
+  } catch (e) {
+    clearResult.value = { success: false, message: action + '失败: ' + (e.response?.data?.message || e.message) }
+  } finally {
+    vectorizing.value = false
+    vectorizingFileId.value = null
+    setTimeout(() => { clearResult.value = null }, 3000)
+  }
 }
 </script>

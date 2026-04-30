@@ -1,19 +1,24 @@
 # OMAgent 构建脚本
-# 用法: .\build.ps1
+# 用法: .\scripts\build.ps1 （从项目根目录执行）
 # 功能: Maven打包 + 同步资源文件到config目录
 
 $ErrorActionPreference = "Stop"
-$projectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectDir = Split-Path -Parent $scriptDir
 $env:JAVA_HOME = "C:\Program Files\Java\jdk-17"
+$logDir = "$projectDir\logs"
+
+# 确保日志目录存在
+New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 
 Write-Host "=== OMAgent Build ===" -ForegroundColor Cyan
 
 # 1. Maven 打包
 Write-Host "[1/2] Maven packaging..." -ForegroundColor Yellow
 cd $projectDir
-mvn clean package -DskipTests
+mvn clean package -DskipTests 2>&1 | Tee-Object -FilePath "$logDir\build.log"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Maven build failed!" -ForegroundColor Red
+    Write-Host "Maven build failed! See logs\build.log for details." -ForegroundColor Red
     exit 1
 }
 

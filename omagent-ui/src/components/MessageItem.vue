@@ -61,4 +61,34 @@ const renderedContent = computed(() => {
 .hljs-pre:hover .copy-btn {
   @apply opacity-100;
 }
+
+/* 来源区块样式 */
+.source-section-kb {
+  @apply border-l-2 border-primary/60 pl-3 py-1 mb-3;
+  background: rgba(59, 130, 246, 0.04);
+  border-radius: 0 6px 6px 0;
+}
+.source-section-kb h3 {
+  @apply text-primary text-sm font-semibold mb-2;
+}
+/* 去掉h3左侧border，避免与section border重叠 */
+.source-section-kb h3,
+.source-section-ai h3 {
+  border-left: none !important;
+  padding-left: 0 !important;
+}
+/* 隐藏合并后多余的h3标题（连续同类型section合并时，第二个及之后的h3不显示） */
+.source-section-kb h3 ~ h3,
+.source-section-ai h3 ~ h3 {
+  display: none;
+}
+
+.source-section-ai {
+  @apply border-l-2 border-amber-500/60 pl-3 py-1 mb-3 mt-4;
+  background: rgba(245, 158, 11, 0.06);
+  border-radius: 0 6px 6px 0;
+}
+.source-section-ai h3 {
+  @apply text-amber-400 text-sm font-semibold mb-2;
+}
 </style>

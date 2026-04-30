@@ -4,6 +4,7 @@ import com.eastcom.omagent.rag.KnowledgeBaseService;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -37,6 +38,16 @@ public class ConfigSearchTool {
         List<Document> results = knowledgeBaseService.searchConfig(
                 request.query(), 5, request.module(), request.docType()
         );
+
+        // 方案4：检索无结果时返回友好提示，避免LLM编造答案
+        if (results.isEmpty()) {
+            return new Response(
+                    "未在配置知识库中找到与「" + request.query() + "」相关的信息。" +
+                    "建议：1. 检查关键词是否正确；2. 尝试使用更通用的关键词；3. 上传相关配置文档后再试。",
+                    Collections.emptyList()
+            );
+        }
+
         String content = knowledgeBaseService.formatSearchResults(results);
         List<String> sources = results.stream()
                 .map(doc -> doc.getMetadata().getOrDefault("source", "未知").toString())

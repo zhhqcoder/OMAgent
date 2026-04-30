@@ -46,6 +46,9 @@ export const fileApi = {
 export const knowledgeApi = {
   import: (data) => api.post('/knowledge/import', data),
   stats: () => api.get('/knowledge/stats'),
+  clear: (type) => api.delete(`/knowledge/clear/${type}`),
+  deleteFile: (fileId) => api.delete(`/knowledge/file/${fileId}`),
+  reimport: (fileId, params = {}) => api.post(`/knowledge/reimport/${fileId}`, null, { params }),
 }
 
 export default api

@@ -13,5 +13,9 @@ public interface UploadFileRepository extends JpaRepository<UploadFile, String> 
 
     List<UploadFile> findByKnowledgeTypeAndVectorizedFalse(String knowledgeType);
 
+    List<UploadFile> findByKnowledgeType(String knowledgeType);
+
     long countByKnowledgeType(String knowledgeType);
+
+    long countByKnowledgeTypeAndVectorizedTrue(String knowledgeType);
 }
